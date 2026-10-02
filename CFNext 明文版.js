@@ -817,6 +817,7 @@ function parseHostPort(addr, defaultPort = 443) {
   return { host: addr, port: defaultPort };
 }
 // ---- VPN Gate（家宽模式）----
+const HOME_WAN_STRONG_DC_RE = /\b(?:aws|amazon(?:\s+web\s+services|\s+technologies)?|ec2|google\s+cloud|gcp|azure|oracle\s+cloud|digitalocean|vultr|linode|akamai|hetzner|ovh|leaseweb|contabo|scaleway|upcloud|choopa|racknerd|m247|psychz|datacamp|quadranet|serverius)\b/i;
 // 拉取 VPN Gate 每日服务器列表（https://www.vpngate.net/api/iphone/，UTF-8 CSV）：
 // 列顺序 HostName,IP,TCPPort,UDPPort,Speed,Ping,Score,CountryLong,CountryShort,NumVpnSessions,Uptime,TotalUsers,TotalTraffic,LogType,Operator,Message,OpenVPN_ConfigData_Base64
 // ovpn 配置（含 CA/客户端证书）由末列 Base64 内嵌，无需二次请求
@@ -845,9 +846,13 @@ async function fetchVpnGateList(country) {
     if (c.length < 15) return;
     const host = (c[0] || '').trim();
     const ip = (c[1] || '').trim();
-    // 剔除官方机房节点：public-vpn 前缀 + 219.100.37. 网段（软银机房），易满员且握手失败率高，只留住宅宽带
+    // 剔除官方机房节点：public-vpn 前缀 + 219.100.37. 网段（软银机房）
     if (host.toLowerCase().indexOf('public-vpn') === 0) return;
     if (ip.indexOf('219.100.37.') === 0) return;
+    // 只用 VPN Gate 的 Operator / Message 固定列做“强特征”过滤，避免把 Base64 或其他列误当成机房信息。
+    // 此处故意只匹配明确云厂商/托管商，不使用宽泛的 VPS/Cloud/Data Center 关键词，优先保证可用性。
+    const metaText = ((c[12] || '') + ' ' + (c[13] || '')).trim();
+    if (HOME_WAN_STRONG_DC_RE.test(metaText)) return;
     const ovpnB64 = ovpnB64Find(c);
     if (!ip || !ovpnB64) return;
     // 真实列序（15 列）：HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,Uptime,TotalUsers,TotalTraffic,LogType,Operator,Message,OpenVPN_ConfigData_Base64
@@ -928,7 +933,7 @@ function hwOvpnToNode(x, cfg) {
 // 窗口从 6h 缩短到 30min：VPN Gate 列表每小时清空重建、每 5 分钟按吞吐重排，6h 快照太旧会把列表低谷期
 // 的少量节点粘住不更新（线上实测缓存快照仅 22 台，强制刷新后同刻拉到 99 台）
 // 缓存带版本号：列序修复（V2.6.0）后旧缓存（错位数据）命中即忽略，自动重拉，无需等窗口过期
-const HW_CACHE_V = 2;
+const HW_CACHE_V = 4;
 const HW_CACHE_TTL = 30 * 60 * 1000;      // 家宽缓存窗口：30 分钟
 const HW_MIN_COUNT = 30;                  // 缓存量低于此值视为列表低谷快照：未过期也联网刷新一次（拉取失败回退缓存）
 async function getHomeWanCache(env, allowStale) {
